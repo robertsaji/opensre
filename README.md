@@ -31,15 +31,22 @@ git clone https://github.com/Tracer-Cloud/open-sre-agent
 cd open-sre-agent
 make install
 cp .env.example .env
-# set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env
 make local-grafana-live
 ```
 
-Want the live local Grafana path to a first RCA report? Start with [docs/local-grafana-live.md](docs/local-grafana-live.md).
+## Choose a Path
 
-Want a generic no-Docker bundled RCA example instead? See [docs/local-rca-demo.md](docs/local-rca-demo.md).
+1. **Local Grafana RCA Demo**
+   Run Tracer against a real local `Grafana + Loki` stack and get a first RCA report with one command.
+   Start here: [Local Grafana RCA Demo](docs/local-grafana-live.md)
 
-Want to run the LangGraph dev UI or connect your own systems? See [SETUP.md](SETUP.md).
+2. **Bundled Local RCA Demo**
+   Skip Docker and run a bundled alert plus bundled evidence fixture locally.
+   Start here: [Bundled Local RCA Demo](docs/local-rca-demo.md)
+
+3. **Full Local Development Setup**
+   Run the LangGraph dev UI locally or connect your own integrations and systems.
+   Start here: [Full Local Setup Guide](SETUP.md)
 
 ---
 
