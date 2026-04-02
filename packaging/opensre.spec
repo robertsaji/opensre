@@ -1,6 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+
+ROOT = Path(SPECPATH).parent
 
 hiddenimports = collect_submodules("app")
 datas = collect_data_files("app") + copy_metadata("opensre")
@@ -8,8 +12,8 @@ datas = collect_data_files("app") + copy_metadata("opensre")
 block_cipher = None
 
 a = Analysis(
-    ["app/cli/__main__.py"],
-    pathex=[],
+    [str(ROOT / "app" / "cli" / "__main__.py")],
+    pathex=[str(ROOT)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
