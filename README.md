@@ -89,17 +89,21 @@ Unlike closed SRE platforms, Tracer is **fully open source and self-hostable**. 
 
 ## How is Open SRE different?
 
-[SWE-smith](https://arxiv.org/abs/2504.21798) gave coding agents scalable training data and clear feedback. Production incident response still has no equivalent. Distributed failures are slower, noisier, and harder to simulate and evaluate than local code tasks, which is why AI SRE, and AI for production debugging more broadly, remains unsolved.
+SWE-bench<sup>1</sup> gave coding agents scalable training data and clear feedback. Production incident response still has no equivalent.
 
-Open SRE is building that missing layer: 
+Distributed failures are slower, noisier, and harder to simulate and evaluate than local code tasks, which is why AI SRE, and AI for production debugging more broadly, remains unsolved.
+
+OpenSRE is building that missing layer:
 
 > an open reinforcement learning environment for infrastructure incident response, with end-to-end tests and synthetic incident simulations for realistic production failures
 
 We do that by:
 - running scored synthetic RCA suites that check root-cause accuracy, required evidence, and adversarial red herrings [(tests/synthetic)](tests/synthetic/rds_postgres)
-- running real world end-to-end tests across cloud-backed scenarios including Kubernetes, EC2, CloudWatch, Lambda, ECS Fargate, and Flink [(tests/e2e)](tests/e2e)
+- running real-world end-to-end tests across cloud-backed scenarios including Kubernetes, EC2, CloudWatch, Lambda, ECS Fargate, and Flink [(tests/e2e)](tests/e2e)
 
-Our goal is to scale this into thousands of realistic infrastructure failure scenarios and become the benchmark and training ground for AI SRE. 
+Our goal is to scale this into thousands of realistic infrastructure failure scenarios and become the benchmark and training ground for AI SRE.
+
+<sup>1</sup> https://arxiv.org/abs/2310.06770
 
 ---
 
