@@ -37,41 +37,10 @@ jobs:
           # Do not upload yet — filter vendored fixture paths, then upload-sarif below.
           upload: failure-only
 
-      # SARIF artifact URIs are often absolute (file:///.../repo/tests/e2e/...); leading ** matches any prefix.
-      - name: Filter SARIF (exclude vendored pipeline fixtures)
-        uses: advanced-security/filter-sarif@v1
-        with:
-          patterns: |
-            -**/tests/e2e/upstream_*/pipeline_code/**
-            -**/upstream_lambda/pipeline_code/**
-            -**/upstream_apache_flink_ecs/pipeline_code/**
-            -**/upstream_prefect_ecs_fargate/pipeline_code/**
-          input: sarif-results/python.sarif
-          output: sarif-results/python.sarif
-
-      # hashFiles() often misses files created earlier in the job; use a filesystem check so Code Quality
-      # SARIF (reliability alerts in vendored urllib3/requests) is filtered when present.
-      - name: Detect Code Quality SARIF
-        id: quality_sarif
-        shell: bash
-        run: |
-          if [ -f sarif-results/python.quality.sarif ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Filter SARIF (code quality, same exclusions)
-        if: steps.quality_sarif.outputs.present == 'true'
-        uses: advanced-security/filter-sarif@v1
-        with:
-          patterns: |
-            -**/tests/e2e/upstream_*/pipeline_code/**
-            -**/upstream_lambda/pipeline_code/**
-            -**/upstream_apache_flink_ecs/pipeline_code/**
-            -**/upstream_prefect_ecs_fargate/pipeline_code/**
-          input: sarif-results/python.quality.sarif
-          output: sarif-results/python.quality.sarif
+      # Resolve artifact URIs (file:, index, uriBaseId) and drop vendored pipeline_code findings.
+      # Glob-only SARIF filters can miss some locations; this covers Code Scanning + Code Quality.
+      - name: Strip vendored pipeline_code findings from SARIF
+        run: python3 .github/scripts/filter_vendored_pipeline_sarif.py sarif-results
 
       - name: Upload SARIF to GitHub
         uses: github/codeql-action/upload-sarif@v4
