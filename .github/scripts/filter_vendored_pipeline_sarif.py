@@ -28,6 +28,9 @@ _VENDORED_MARKERS: tuple[str, ...] = (
     "upstream_prefect_ecs_fargate/pipeline_code/",
     # Unique to the Lambda fixture bundle (requests/urllib3 vendored under api_ingester).
     "pipeline_code/api_ingester/",
+    # Base-relative SARIF (uriBaseId) often omits tests/e2e/.../pipeline_code/; these segments stay unique.
+    "api_ingester/urllib3/",
+    "api_ingester/requests/",
 )
 
 
