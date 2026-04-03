@@ -29,6 +29,9 @@ from app.analytics.cli import (
     capture_test_synthetic_started,
     capture_tests_listed,
     capture_tests_picker_opened,
+    capture_update_completed,
+    capture_update_failed,
+    capture_update_started,
 )
 from app.analytics.provider import capture_first_run_if_needed, shutdown_analytics
 from app.version import get_version
@@ -62,6 +65,7 @@ def _render_help() -> None:
         ("investigate",   "Run an RCA investigation against an alert payload."),
         ("tests",         "Browse and run inventoried tests from the terminal."),
         ("integrations",  "Manage local integration credentials."),
+        ("update",        "Check for a newer version and update if one is available."),
     ]:
         console.print(Text.assemble(("    ", ""), (f"{name:<16}", "bold cyan"), desc))
     console.print()
@@ -93,6 +97,7 @@ def _render_landing() -> None:
         ("opensre investigate -i alert.json", "Run RCA against an alert payload"),
         ("opensre tests",                     "Browse and run inventoried tests"),
         ("opensre integrations list",         "Show configured integrations"),
+        ("opensre update",                    "Update to the latest version"),
     ]:
         console.print(Text.assemble(("    ", ""), (f"{cmd:<42}", "bold cyan"), desc))
     console.print()
@@ -132,6 +137,22 @@ def cli(ctx: click.Context) -> None:
         capture_cli_invoked()
         _render_landing()
         raise SystemExit(0)
+
+
+@cli.command()
+@click.option("--check", "check_only", is_flag=True, help="Report whether an update is available without installing.")
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
+def update(check_only: bool, yes: bool) -> None:
+    """Check for a newer version and update if one is available."""
+    from app.cli.update import run_update
+
+    capture_update_started(check_only=check_only)
+    rc = run_update(check_only=check_only, yes=yes)
+    if rc == 0:
+        capture_update_completed()
+    else:
+        capture_update_failed()
+    raise SystemExit(rc)
 
 
 @cli.command()
