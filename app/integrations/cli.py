@@ -38,7 +38,10 @@ _R = "\033[0m"
 
 def _json_echo(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
+
+
 _SECRET_KEYS = frozenset({
+    "api_token",
     "api_key",
     "app_key",
     "password",
