@@ -283,7 +283,7 @@ def resolve_effective_integrations() -> dict[str, dict[str, Any]]:
                 "source": "local env",
                 "config": {
                     "host": clickhouse_host,
-                    "port": int(os.getenv("CLICKHOUSE_PORT", "8123")),
+                    "port": int(os.getenv("CLICKHOUSE_PORT", "8123") or "8123"),
                     "database": os.getenv("CLICKHOUSE_DATABASE", "default").strip(),
                     "username": os.getenv("CLICKHOUSE_USER", "default").strip(),
                     "password": os.getenv("CLICKHOUSE_PASSWORD", "").strip(),
