@@ -6,6 +6,7 @@ Credentials come from the user's Vercel integration stored locally or via env va
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -43,6 +44,9 @@ def _extract_event_text(event: dict[str, Any]) -> str:
 
 
 def _extract_runtime_log_message(log: dict[str, Any]) -> str:
+    message = log.get("message")
+    if message is not None:
+        return str(message)
     payload = log.get("payload")
     if isinstance(payload, dict):
         for key in ("text", "message", "body"):
@@ -52,6 +56,39 @@ def _extract_runtime_log_message(log: dict[str, Any]) -> str:
     if payload is not None and not isinstance(payload, dict):
         return str(payload)
     return ""
+
+
+def _parse_runtime_logs_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        logs = payload.get("logs", [])
+        return [item for item in logs if isinstance(item, dict)] if isinstance(logs, list) else []
+    return []
+
+
+def _parse_runtime_logs_text(raw_text: str) -> list[dict[str, Any]]:
+    stripped = raw_text.strip()
+    if not stripped:
+        return []
+
+    try:
+        return _parse_runtime_logs_payload(json.loads(stripped))
+    except json.JSONDecodeError:
+        pass
+
+    logs: list[dict[str, Any]] = []
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            logs.append(payload)
+    return logs
 
 
 class VercelConfig(StrictConfigModel):
@@ -256,29 +293,46 @@ class VercelClient:
             logger.warning("[vercel] get_deployment_events error type=%s detail=%s", type(e).__name__, e)
             return {"success": False, "error": str(e)}
 
-    def get_runtime_logs(self, deployment_id: str, limit: int = 100) -> dict[str, Any]:
+    def get_runtime_logs(
+        self,
+        deployment_id: str,
+        limit: int = 100,
+        *,
+        project_id: str = "",
+    ) -> dict[str, Any]:
         """Fetch serverless function runtime logs (stdout/stderr) for a deployment."""
         params: dict[str, Any] = {"limit": min(limit, 2000)}
         params.update(self.config.team_params)
         try:
-            resp = self._get_client().get(f"/v1/deployments/{deployment_id}/logs", params=params)
+            path = f"/v1/projects/{project_id}/deployments/{deployment_id}/runtime-logs"
+            if not project_id:
+                path = f"/v1/deployments/{deployment_id}/logs"
+            resp = self._get_client().get(path, params=params)
             resp.raise_for_status()
-            data = resp.json()
-            raw_logs = data if isinstance(data, list) else data.get("logs", [])
+            try:
+                raw_logs = _parse_runtime_logs_payload(resp.json())
+            except ValueError:
+                raw_logs = _parse_runtime_logs_text(resp.text)
             logs = [
                 {
-                    "id": log.get("id", ""),
-                    "created_at": log.get("createdAt", ""),
+                    "id": log.get("id", "") or log.get("rowId", ""),
+                    "created_at": log.get("createdAt", "") or log.get("timestampInMs", ""),
                     "payload": log.get("payload", {}),
                     "message": _extract_runtime_log_message(log),
-                    "type": log.get("type", ""),
+                    "type": log.get("type", "") or log.get("level", ""),
                     "source": log.get("source", ""),
+                    "level": log.get("level", ""),
+                    "request_path": log.get("requestPath", ""),
+                    "status_code": log.get("responseStatusCode", ""),
+                    "domain": log.get("domain", ""),
                 }
                 for log in raw_logs
                 if isinstance(log, dict)
             ]
             return {"success": True, "logs": logs, "total": len(logs)}
         except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return {"success": True, "logs": [], "total": 0}
             logger.warning(
                 "[vercel] get_runtime_logs HTTP failure status=%s id=%r",
                 e.response.status_code,

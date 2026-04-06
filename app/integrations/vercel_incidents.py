@@ -19,8 +19,9 @@ from app.remote.vercel_poller import (
     collect_vercel_candidates,
     resolve_vercel_config,
 )
+from app.services.vercel import make_vercel_client
 
-_INCIDENT_CACHE_DIR = STORE_PATH.parent / "investigations" / "vercel"
+_INCIDENT_CACHE_DIR: Path = STORE_PATH.parent / "investigations" / "vercel"
 
 
 def _json_echo(data: Any) -> None:
@@ -32,11 +33,34 @@ def _die(message: str) -> None:
     raise SystemExit(1)
 
 
+def _repair_hint() -> str:
+    return (
+        "Run 'opensre integrations verify vercel' to confirm the token, or "
+        "'opensre integrations setup vercel' to replace it."
+    )
+
+
 def _summarize_error(value: str, *, limit: int = 70) -> str:
     text = " ".join(value.split())
     if len(text) <= limit:
         return text
     return f"{text[: limit - 3].rstrip()}..."
+
+
+def _format_timestamp(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.isdigit():
+        timestamp = int(raw)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp // 1000
+        return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return raw
+    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _incident_payload(candidate: VercelInvestigationCandidate) -> dict[str, Any]:
@@ -66,6 +90,24 @@ def _incident_label(candidate: VercelInvestigationCandidate) -> str:
     state = payload["state"] or "UNKNOWN"
     error = _summarize_error(str(payload["error"] or "No error summary"))
     return f"{project} | {deployment_id} | {state} | {error}"
+
+
+def _project_label(project: dict[str, Any]) -> str:
+    name = str(project.get("name", "")).strip() or str(project.get("id", "unknown")).strip()
+    framework = str(project.get("framework", "")).strip()
+    updated_at = _format_timestamp(project.get("updated_at", ""))
+    parts = [name]
+    if framework:
+        parts.append(framework)
+    if updated_at:
+        parts.append(f"updated {updated_at}")
+    return " | ".join(parts)
+
+
+def _project_allowlist(project: dict[str, Any]) -> tuple[str, ...]:
+    project_id = str(project.get("id", "")).strip()
+    project_name = str(project.get("name", "")).strip()
+    return tuple(item for item in (project_id, project_name) if item)
 
 
 def _candidate_created_at(candidate: VercelInvestigationCandidate) -> int:
@@ -185,10 +227,64 @@ def _incident_actions(candidate: VercelInvestigationCandidate) -> str:
             _execute_rca(candidate)
 
 
+def _load_projects() -> list[dict[str, Any]]:
+    config = resolve_vercel_config()
+    if config is None:
+        raise VercelResolutionError(
+            "Vercel integration is not configured. "
+            "Set Vercel credentials before browsing incidents."
+        )
+
+    client = make_vercel_client(config.api_token, config.team_id)
+    if client is None:
+        raise VercelResolutionError("Vercel integration is not configured.")
+
+    with client:
+        projects_result = client.list_projects(limit=100)
+    if not projects_result.get("success"):
+        raise VercelResolutionError(
+            "Failed to list Vercel projects: "
+            f"{projects_result.get('error', 'unknown error')}"
+        )
+
+    raw_projects = projects_result.get("projects", [])
+    projects = [project for project in raw_projects if isinstance(project, dict)]
+    return sorted(projects, key=lambda project: str(project.get("name", "")).strip().lower())
+
+
+def _select_project(projects: list[dict[str, Any]]) -> dict[str, Any] | None:
+    project_by_id = {
+        str(project.get("id", "")).strip(): project
+        for project in projects
+        if str(project.get("id", "")).strip()
+    }
+    choices = [
+        questionary.Choice(_project_label(project), value=str(project.get("id", "")).strip())
+        for project in projects
+        if str(project.get("id", "")).strip()
+    ]
+    choices.extend(
+        [
+            questionary.Separator(),
+            questionary.Choice("Exit", value="_exit"),
+        ]
+    )
+    selected = questionary.select("Select a Vercel project:", choices=choices).ask()
+    if selected is None or selected == "_exit":
+        return None
+    if isinstance(selected, str):
+        return project_by_id.get(selected)
+    return None
+
+
 def _select_incident(
     candidates: list[VercelInvestigationCandidate],
 ) -> VercelInvestigationCandidate | str | None:
-    choices = [questionary.Choice(_incident_label(candidate), value=candidate) for candidate in candidates]
+    candidate_by_key = {candidate.dedupe_key: candidate for candidate in candidates}
+    choices = [
+        questionary.Choice(_incident_label(candidate), value=candidate.dedupe_key)
+        for candidate in candidates
+    ]
     choices.extend(
         [
             questionary.Separator(),
@@ -198,39 +294,83 @@ def _select_incident(
     )
     while True:
         selected = questionary.select("Select a Vercel incident:", choices=choices).ask()
-        if selected in {None, "_exit"}:
+        if selected is None or selected == "_exit":
             return None
         if selected == "_refresh":
             return "_refresh"
-        if isinstance(selected, VercelInvestigationCandidate):
-            return selected
+        if isinstance(selected, str):
+            candidate = candidate_by_key.get(selected)
+            if candidate is not None:
+                return candidate
 
 
-def _load_incidents(limit: int) -> list[VercelInvestigationCandidate]:
-    config = resolve_vercel_config()
-    if config is None:
-        raise VercelResolutionError(
-            "Vercel integration is not configured. Set Vercel credentials before browsing incidents."
-        )
-
-    candidates = collect_vercel_candidates(deployment_limit=max(limit, 1))
+def _load_incidents(
+    limit: int,
+    *,
+    project_allowlist: tuple[str, ...] = (),
+) -> list[VercelInvestigationCandidate]:
+    candidates = collect_vercel_candidates(
+        project_allowlist=project_allowlist,
+        deployment_limit=max(limit, 1),
+        fail_on_error=True,
+    )
     return sorted(candidates, key=_candidate_created_at, reverse=True)[:limit]
+
+
+def _load_incidents_with_status(
+    limit: int,
+    *,
+    project_name: str,
+    project_allowlist: tuple[str, ...] = (),
+) -> list[VercelInvestigationCandidate]:
+    from rich.console import Console
+    from rich.status import Status
+
+    console = Console(highlight=False)
+    with Status(
+        f"  Loading incidents for {project_name}...",
+        console=console,
+        spinner="dots",
+    ):
+        return _load_incidents(limit, project_allowlist=project_allowlist)
 
 
 def cmd_vercel_incidents(*, limit: int = 20) -> None:
     """Browse recent Vercel incidents and view or execute RCA from the CLI."""
     try:
-        candidates = _load_incidents(limit)
+        if is_json_output():
+            candidates = _load_incidents(limit)
+            _json_echo([_incident_payload(candidate) for candidate in candidates])
+            return
+
+        projects = _load_projects()
     except VercelResolutionError as exc:
-        _die(str(exc))
+        _die(f"{exc} {_repair_hint()}")
         return
 
-    if is_json_output():
-        _json_echo([_incident_payload(candidate) for candidate in candidates])
+    if not projects:
+        print("  No Vercel projects were found for the configured credentials.")
+        return
+
+    selected_project = _select_project(projects)
+    if selected_project is None:
+        return
+
+    project_name = str(selected_project.get("name", "")).strip() or "selected project"
+    project_allowlist = _project_allowlist(selected_project)
+
+    try:
+        candidates = _load_incidents_with_status(
+            limit,
+            project_name=project_name,
+            project_allowlist=project_allowlist,
+        )
+    except VercelResolutionError as exc:
+        _die(f"{exc} {_repair_hint()}")
         return
 
     if not candidates:
-        print("  No actionable Vercel incidents were found.")
+        print(f"  No actionable Vercel incidents were found for {project_name}.")
         return
 
     while True:
@@ -238,9 +378,17 @@ def cmd_vercel_incidents(*, limit: int = 20) -> None:
         if selected is None:
             return
         if selected == "_refresh":
-            refreshed = _load_incidents(limit)
+            try:
+                refreshed = _load_incidents_with_status(
+                    limit,
+                    project_name=project_name,
+                    project_allowlist=project_allowlist,
+                )
+            except VercelResolutionError as exc:
+                _die(f"{exc} {_repair_hint()}")
+                return
             if not refreshed:
-                print("  No actionable Vercel incidents were found.")
+                print(f"  No actionable Vercel incidents were found for {project_name}.")
                 return
             candidates = refreshed
             continue

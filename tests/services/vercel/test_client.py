@@ -8,10 +8,10 @@ from app.services.vercel.client import VercelClient, VercelConfig, make_vercel_c
 
 
 class _FakeResponse:
-    def __init__(self, payload: Any, status_code: int = 200) -> None:
+    def __init__(self, payload: Any, status_code: int = 200, *, text: str | None = None) -> None:
         self._payload = payload
         self.status_code = status_code
-        self.text = str(payload)[:200]
+        self.text = text if text is not None else str(payload)[:200]
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -178,18 +178,67 @@ def test_get_deployment_events_list_response(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_get_runtime_logs_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
     payload = [
-        {"id": "log_1", "createdAt": 1704067200000, "payload": {"text": "invoked"}, "type": "request", "source": "lambda"},
+        {
+            "rowId": "log_1",
+            "timestampInMs": 1704067200000,
+            "message": "invoked",
+            "level": "error",
+            "source": "request",
+            "requestPath": "/app-includes/css/buttons.css",
+            "responseStatusCode": 404,
+        },
     ]
-    monkeypatch.setattr(
-        "app.services.vercel.client.httpx.Client.get",
-        lambda _self, _path, **_kw: _FakeResponse(payload),
-    )
-    result = _client().get_runtime_logs("dpl_xyz")
+
+    def _fake_get(_self: Any, path: str, **_kw: Any) -> _FakeResponse:
+        captured["path"] = path
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("app.services.vercel.client.httpx.Client.get", _fake_get)
+    result = _client().get_runtime_logs("dpl_xyz", project_id="proj_123")
     assert result["success"] is True
     assert result["total"] == 1
     assert result["logs"][0]["id"] == "log_1"
     assert result["logs"][0]["message"] == "invoked"
+    assert result["logs"][0]["level"] == "error"
+    assert result["logs"][0]["status_code"] == 404
+    assert result["logs"][0]["request_path"] == "/app-includes/css/buttons.css"
+    assert captured["path"] == "/v1/projects/proj_123/deployments/dpl_xyz/runtime-logs"
+
+
+def test_get_runtime_logs_stream_json_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _StreamResponse(_FakeResponse):
+        def json(self) -> Any:
+            raise ValueError("not a JSON document")
+
+    raw_text = (
+        '{"rowId":"log_1","timestampInMs":1704067200000,"message":"Error loading resource",'
+        '"level":"error","source":"request","requestPath":"/foo","responseStatusCode":404}\n'
+        '{"rowId":"log_2","timestampInMs":1704067201000,"message":"ok","level":"info",'
+        '"source":"request","requestPath":"/bar","responseStatusCode":200}\n'
+    )
+    monkeypatch.setattr(
+        "app.services.vercel.client.httpx.Client.get",
+        lambda _self, _path, **_kw: _StreamResponse(None, text=raw_text),
+    )
+    result = _client().get_runtime_logs("dpl_xyz")
+    assert result["success"] is True
+    assert result["total"] == 2
+    assert result["logs"][0]["message"] == "Error loading resource"
+    assert result["logs"][0]["level"] == "error"
+    assert result["logs"][1]["id"] == "log_2"
+
+
+def test_get_runtime_logs_404_returns_empty_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.vercel.client.httpx.Client.get",
+        lambda _self, _path, **_kw: _FakeResponse({"error": "not found"}, 404),
+    )
+    result = _client().get_runtime_logs("dpl_xyz")
+    assert result["success"] is True
+    assert result["total"] == 0
+    assert result["logs"] == []
 
 
 def test_team_params_included_when_set(monkeypatch: pytest.MonkeyPatch) -> None:

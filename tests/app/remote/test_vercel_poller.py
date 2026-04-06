@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.remote.vercel_poller import (
     VercelPoller,
     VercelPollerSettings,
+    VercelResolutionError,
     collect_vercel_candidates,
     enrich_remote_alert_from_vercel,
     parse_vercel_url,
@@ -62,7 +65,14 @@ class _FakeVercelClient:
             return {"success": False, "error": "not found"}
         return {"success": True, "events": self._events[:limit], "total": len(self._events)}
 
-    def get_runtime_logs(self, deployment_id: str, limit: int = 100) -> dict[str, Any]:
+    def get_runtime_logs(
+        self,
+        deployment_id: str,
+        limit: int = 100,
+        *,
+        project_id: str = "",
+    ) -> dict[str, Any]:
+        _ = project_id
         if deployment_id != self._deployment_details.get("id"):
             return {"success": False, "error": "not found"}
         return {
@@ -195,3 +205,74 @@ def test_collect_vercel_candidates_returns_actionable_deployments(monkeypatch) -
     assert len(candidates) == 1
     assert candidates[0].raw_alert["vercel_deployment_state"] == "ERROR"
     assert candidates[0].raw_alert["error_message"] == "Build failed"
+
+
+def test_collect_vercel_candidates_treats_runtime_error_level_as_actionable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.remote.vercel_poller.resolve_vercel_config",
+        lambda: VercelConfig(api_token="tok_test", team_id=""),
+    )
+    monkeypatch.setattr(
+        "app.remote.vercel_poller._make_client_from_config",
+        lambda _config: _FakeVercelClient(
+            projects=[{"id": "proj_123", "name": "tracer-marketing-website-v3"}],
+            deployments=[
+                {
+                    "id": "dpl_123",
+                    "project_id": "proj_123",
+                    "name": "tracer-marketing-website-v3",
+                    "state": "READY",
+                    "error": "",
+                    "meta": {},
+                }
+            ],
+            deployment_details={
+                "id": "dpl_123",
+                "name": "tracer-marketing-website-v3",
+                "state": "READY",
+                "error": "",
+                "meta": {},
+            },
+            events=[],
+            runtime_logs=[
+                {
+                    "id": "log_error",
+                    "level": "error",
+                    "source": "request",
+                    "message": "Request completed",
+                    "status_code": 404,
+                    "request_path": "/app-includes/css/buttons.css",
+                }
+            ],
+        ),
+    )
+
+    candidates = collect_vercel_candidates()
+
+    assert len(candidates) == 1
+    assert candidates[0].raw_alert["vercel_deployment_state"] == "READY"
+
+
+def test_collect_vercel_candidates_raises_on_api_error_when_requested(monkeypatch) -> None:
+    class _FakeErrorVercelClient:
+        def __enter__(self) -> _FakeErrorVercelClient:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def list_projects(self, limit: int = 100) -> dict[str, Any]:
+            _ = limit
+            return {"success": False, "error": "HTTP 403: invalidToken"}
+
+    monkeypatch.setattr(
+        "app.remote.vercel_poller.resolve_vercel_config",
+        lambda: VercelConfig(api_token="tok_test", team_id=""),
+    )
+    monkeypatch.setattr(
+        "app.remote.vercel_poller._make_client_from_config",
+        lambda _config: _FakeErrorVercelClient(),
+    )
+
+    with pytest.raises(VercelResolutionError, match="Failed to list Vercel projects"):
+        collect_vercel_candidates(fail_on_error=True)

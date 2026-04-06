@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import app.integrations.vercel_incidents as vercel_incidents
-from app.remote.vercel_poller import VercelInvestigationCandidate
+from app.remote.vercel_poller import VercelInvestigationCandidate, VercelResolutionError
 from app.services.vercel import VercelConfig
 
 
@@ -16,6 +18,20 @@ class _Prompt:
         if not self._answers:
             return None
         return self._answers.pop(0)
+
+
+def _project(
+    *,
+    project_id: str = "proj_123",
+    name: str = "tracer-web",
+    framework: str = "nextjs",
+) -> dict[str, Any]:
+    return {
+        "id": project_id,
+        "name": name,
+        "framework": framework,
+        "updated_at": "2026-04-06T00:00:00Z",
+    }
 
 
 def _candidate(*, deployment_id: str = "dpl_123", created_at: str = "200") -> VercelInvestigationCandidate:
@@ -55,6 +71,91 @@ def test_cmd_vercel_incidents_json_outputs_incidents(monkeypatch, capsys) -> Non
     captured = capsys.readouterr()
     assert '"deployment_id": "dpl_123"' in captured.out
     assert '"state": "ERROR"' in captured.out
+
+
+def test_cmd_vercel_incidents_exits_on_api_error(monkeypatch, capsys) -> None:
+    answers: list[object] = ["proj_123"]
+    monkeypatch.setattr(
+        vercel_incidents,
+        "_load_projects",
+        lambda: [_project()],
+    )
+    monkeypatch.setattr(
+        "app.integrations.vercel_incidents.collect_vercel_candidates",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            VercelResolutionError("Failed to list Vercel projects: HTTP 403: invalidToken")
+        ),
+    )
+    monkeypatch.setattr("app.cli.context._root_obj", lambda: {"json": False})
+    monkeypatch.setattr(
+        vercel_incidents.questionary,
+        "select",
+        lambda *_args, **_kwargs: _Prompt(answers),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        vercel_incidents.cmd_vercel_incidents(limit=5)
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert "Failed to list Vercel projects" in captured.err
+    assert "opensre integrations verify vercel" in captured.err
+    assert "opensre integrations setup vercel" in captured.err
+
+
+def test_select_incident_returns_selected_candidate(monkeypatch) -> None:
+    answers: list[object] = ["dpl_123"]
+    candidate = _candidate()
+    monkeypatch.setattr(
+        vercel_incidents.questionary,
+        "select",
+        lambda *_args, **_kwargs: _Prompt(answers),
+    )
+
+    result = vercel_incidents._select_incident([candidate])
+
+    assert result == candidate
+
+
+def test_project_label_formats_epoch_milliseconds() -> None:
+    label = vercel_incidents._project_label({
+        "id": "proj_123",
+        "name": "tracer-marketing-website-v3",
+        "framework": "nextjs",
+        "updated_at": "1774890235837",
+    })
+
+    assert "1774890235837" not in label
+    assert "updated " in label
+
+
+def test_cmd_vercel_incidents_scopes_to_selected_project(monkeypatch) -> None:
+    answers: list[object] = ["proj_123", "_exit"]
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("app.cli.context._root_obj", lambda: {"json": False})
+    monkeypatch.setattr(
+        vercel_incidents,
+        "_load_projects",
+        lambda: [_project(project_id="proj_123", name="tracer-web"), _project(project_id="proj_999", name="other-web")],
+    )
+
+    def _fake_collect(**kwargs: Any) -> list[VercelInvestigationCandidate]:
+        captured["project_allowlist"] = kwargs.get("project_allowlist")
+        return [_candidate()]
+
+    monkeypatch.setattr(
+        "app.integrations.vercel_incidents.collect_vercel_candidates",
+        _fake_collect,
+    )
+    monkeypatch.setattr(
+        vercel_incidents.questionary,
+        "select",
+        lambda *_args, **_kwargs: _Prompt(answers),
+    )
+
+    vercel_incidents.cmd_vercel_incidents(limit=5)
+
+    assert captured["project_allowlist"] == ("proj_123", "tracer-web")
 
 
 def test_incident_actions_can_execute_and_view_saved_rca(

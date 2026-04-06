@@ -31,6 +31,7 @@ SETUP_SERVICES: tuple[str, ...] = (
     "sentry",
     "slack",
     "tracer",
+    "vercel",
 )
 
 VERIFY_SERVICES: tuple[str, ...] = (

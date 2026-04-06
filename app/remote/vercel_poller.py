@@ -176,7 +176,19 @@ def _error_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _error_logs(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [log for log in logs if _has_error_text(_extract_log_message(log))]
+    return [log for log in logs if _runtime_log_is_error(log)]
+
+
+def _runtime_log_is_error(log: dict[str, Any]) -> bool:
+    level = str(log.get("level", "") or log.get("type", "")).strip().lower()
+    if level in {"error", "fatal"}:
+        return True
+
+    status_code = str(log.get("status_code", "")).strip()
+    if status_code.isdigit() and int(status_code) >= 500:
+        return True
+
+    return _has_error_text(_extract_log_message(log))
 
 
 def _runtime_log_line(log: dict[str, Any]) -> str:
@@ -343,6 +355,7 @@ def _resolve_project(
 def _fetch_deployment_bundle(
     client: VercelClient,
     *,
+    project_id: str,
     deployment_id: str,
     log_limit: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -354,7 +367,11 @@ def _fetch_deployment_bundle(
         )
 
     events_result = client.get_deployment_events(deployment_id, limit=log_limit)
-    runtime_logs_result = client.get_runtime_logs(deployment_id, limit=log_limit)
+    runtime_logs_result = client.get_runtime_logs(
+        deployment_id,
+        limit=log_limit,
+        project_id=project_id,
+    )
     events = events_result.get("events", []) if events_result.get("success") else []
     runtime_logs = (
         runtime_logs_result.get("logs", []) if runtime_logs_result.get("success") else []
@@ -383,6 +400,7 @@ def _find_deployment_by_selected_log_id(
             continue
         deployment_details, events, runtime_logs = _fetch_deployment_bundle(
             client,
+            project_id=project_id,
             deployment_id=deployment_id,
             log_limit=log_limit,
         )
@@ -417,6 +435,7 @@ def _select_latest_actionable_deployment(
             continue
         deployment_details, events, runtime_logs = _fetch_deployment_bundle(
             client,
+            project_id=project_id,
             deployment_id=deployment_id,
             log_limit=log_limit,
         )
@@ -672,6 +691,7 @@ def enrich_remote_alert_from_vercel(raw_alert: dict[str, Any]) -> dict[str, Any]
         if resolved_deployment_id:
             deployment, events, runtime_logs = _fetch_deployment_bundle(
                 client,
+                project_id=str(project.get("id", "")).strip(),
                 deployment_id=resolved_deployment_id,
                 log_limit=_DEFAULT_LOG_LIMIT,
             )
@@ -777,10 +797,13 @@ def collect_vercel_candidates(
     project_allowlist: tuple[str, ...] = (),
     deployment_limit: int = _DEFAULT_DEPLOYMENT_LIMIT,
     log_limit: int = _DEFAULT_LOG_LIMIT,
+    fail_on_error: bool = False,
 ) -> list[VercelInvestigationCandidate]:
     """Collect actionable Vercel deployment failures for local CLI or background polling."""
     config = resolve_vercel_config()
     if config is None:
+        if fail_on_error:
+            raise VercelResolutionError("Vercel integration is not configured.")
         logger.warning("Skipping Vercel incident collection because the integration is not configured.")
         return []
 
@@ -789,6 +812,11 @@ def collect_vercel_candidates(
     with client:
         projects_result = client.list_projects(limit=_DEFAULT_PROJECT_FETCH_LIMIT)
         if not projects_result.get("success"):
+            if fail_on_error:
+                raise VercelResolutionError(
+                    "Failed to list Vercel projects: "
+                    f"{projects_result.get('error', 'unknown error')}"
+                )
             logger.warning(
                 "Skipping Vercel incident collection because projects could not be listed: %s",
                 projects_result.get("error", "unknown error"),
@@ -814,6 +842,12 @@ def collect_vercel_candidates(
                 limit=deployment_limit,
             )
             if not deployments_result.get("success"):
+                if fail_on_error:
+                    raise VercelResolutionError(
+                        f"Failed to list deployments for Vercel project "
+                        f"{project.get('name', project.get('id', 'unknown'))}: "
+                        f"{deployments_result.get('error', 'unknown error')}"
+                    )
                 logger.warning(
                     "Skipping Vercel project %s because deployments could not be listed: %s",
                     project.get("name", project.get("id", "unknown")),
@@ -829,6 +863,7 @@ def collect_vercel_candidates(
                     continue
                 deployment, events, runtime_logs = _fetch_deployment_bundle(
                     client,
+                    project_id=str(project.get("id", "")).strip(),
                     deployment_id=deployment_id,
                     log_limit=log_limit,
                 )
