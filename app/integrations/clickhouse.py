@@ -154,7 +154,8 @@ def get_query_activity(
                 "FROM system.query_log "
                 "WHERE type = 'QueryFinish' "
                 "ORDER BY event_time DESC "
-                f"LIMIT {effective_limit}"
+                "LIMIT %(limit)s",
+                parameters={"limit": effective_limit},
             )
             queries = []
             for row in result.named_results():
@@ -255,8 +256,8 @@ def get_table_stats(
                 "WHERE active = 1 AND database = %(db)s "
                 "GROUP BY database, table "
                 "ORDER BY total_bytes DESC "
-                f"LIMIT {effective_limit}",
-                parameters={"db": target_db},
+                "LIMIT %(limit)s",
+                parameters={"db": target_db, "limit": effective_limit},
             )
             tables = []
             for row in result.named_results():

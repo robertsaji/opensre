@@ -263,6 +263,35 @@ def resolve_effective_integrations() -> dict[str, dict[str, Any]]:
             },
         }
 
+    clickhouse_integration = classified_integrations.get("clickhouse")
+    if isinstance(clickhouse_integration, dict):
+        effective["clickhouse"] = {
+            "source": source_by_service.get("clickhouse", "local env"),
+            "config": {
+                "host": str(clickhouse_integration.get("host", "")).strip(),
+                "port": clickhouse_integration.get("port", 8123),
+                "database": str(clickhouse_integration.get("database", "default")).strip(),
+                "username": str(clickhouse_integration.get("username", "default")).strip(),
+                "password": str(clickhouse_integration.get("password", "")).strip(),
+                "secure": clickhouse_integration.get("secure", False),
+            },
+        }
+    else:
+        clickhouse_host = os.getenv("CLICKHOUSE_HOST", "").strip()
+        if clickhouse_host:
+            effective["clickhouse"] = {
+                "source": "local env",
+                "config": {
+                    "host": clickhouse_host,
+                    "port": int(os.getenv("CLICKHOUSE_PORT", "8123")),
+                    "database": os.getenv("CLICKHOUSE_DATABASE", "default").strip(),
+                    "username": os.getenv("CLICKHOUSE_USER", "default").strip(),
+                    "password": os.getenv("CLICKHOUSE_PASSWORD", "").strip(),
+                    "secure": os.getenv("CLICKHOUSE_SECURE", "false").strip().lower()
+                    in ("true", "1", "yes"),
+                },
+            }
+
     return EffectiveIntegrations.model_validate(effective).model_dump(exclude_none=True)
 
 
@@ -641,10 +670,12 @@ def _verify_vercel(source: str, config: dict[str, Any]) -> dict[str, str]:
 
 def _verify_opsgenie(source: str, config: dict[str, Any]) -> dict[str, str]:
     try:
-        opsgenie_config = OpsGenieConfig.model_validate({
-            "api_key": config.get("api_key", ""),
-            "region": config.get("region", "us"),
-        })
+        opsgenie_config = OpsGenieConfig.model_validate(
+            {
+                "api_key": config.get("api_key", ""),
+                "region": config.get("region", "us"),
+            }
+        )
     except Exception as err:
         return _result("opsgenie", source, "missing", str(err))
 
@@ -656,12 +687,16 @@ def _verify_opsgenie(source: str, config: dict[str, Any]) -> dict[str, str]:
         result = client.list_alerts(limit=1)
     if not result.get("success"):
         return _result(
-            "opsgenie", source, "failed",
+            "opsgenie",
+            source,
+            "failed",
             f"Alert list check failed: {result.get('error', 'unknown error')}",
         )
 
     return _result(
-        "opsgenie", source, "passed",
+        "opsgenie",
+        source,
+        "passed",
         f"Connected to OpsGenie ({opsgenie_config.region.upper()} region); API key accepted.",
     )
 
