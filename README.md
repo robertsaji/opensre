@@ -13,6 +13,7 @@
   <a href="https://github.com/Tracer-Cloud/opensre/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License"></a>
   <a href="https://github.com/Tracer-Cloud/opensre/blob/main/.github/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Tracer-Cloud/opensre/ci.yml?style=flat-square&label=CI" alt="CI"></a>
   <img src="https://img.shields.io/badge/open%20source-forever-brightgreen?style=flat-square" alt="Open Source">
+  <a href="https://discord.gg/7NTpevXf7w"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <p align="center">
