@@ -68,7 +68,9 @@
               "jira",
               "prefect",
               "google-docs",
-              "discord"
+              "discord",
+              "mysql",
+              "postgresql"
             ]
           }
         ]
