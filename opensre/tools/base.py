@@ -93,4 +93,8 @@ class BaseTool(ABC):
             params = self.extract_params(context)
             return self.run(params)
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(success=False, error=str(exc))
+            # Include the exception type in the error message for easier debugging
+            return ToolResult(
+                success=False,
+                error=f"{type(exc).__name__}: {exc}",
+            )
